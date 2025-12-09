@@ -51,12 +51,20 @@ class Bird(pg.sprite.Sprite):
             (0, +1): pg.transform.rotozoom(img, -90, 0.9),
             (+1, +1): pg.transform.rotozoom(img, -45, 0.9),
         }
+         # --- 無敵（Hyper）用の画像 ---
+        self.hyper_imgs = {k: pg.transform.laplacian(v) for k, v in self.imgs.items()}
+
+         # --- 無敵（Hyper）用の画像 ---
+        self.hyper_imgs = {k: pg.transform.laplacian(v) for k, v in self.imgs.items()}
+
         self.dire = (+1, 0)
         self.image = self.imgs[self.dire]
         self.rect = self.image.get_rect()
         self.rect.center = xy
         self.speed = 10
-
+        self.state = "normal" # ←追加：状態(normal / hyper)
+        self.hyper_life = 0 # ←追加：無敵の残りフレーム        self.state = "normal" # ←追加：状態(normal / hyper)
+        self.hyper_life = 0 # ←追加：無敵の残りフレーム
     def change_img(self, num: int, screen: pg.Surface):
         self.image = pg.transform.rotozoom(pg.image.load(f"fig/{num}.png"), 0, 0.9)
         screen.blit(self.image, self.rect)
@@ -73,17 +81,16 @@ class Bird(pg.sprite.Sprite):
         else:
             self.speed = 10 
         if check_bound(self.rect) != (True, True):
-            self.rect.move_ip(-self.speed * sum_mv[0], -self.speed * sum_mv[1])
-        if sum_mv != [0, 0]:
-            # 正規化された方向タプルにする（-1,0,1 の組み合わせ）
-            dx = 1 if sum_mv[0] > 0 else (-1 if sum_mv[0] < 0 else 0)
-            dy = 1 if sum_mv[1] > 0 else (-1 if sum_mv[1] < 0 else 0)
-            self.dire = (dx, dy)
-            # imgs に存在するキーであれば更新
-            if self.dire in self.imgs:
-                self.image = self.imgs[self.dire]
+            self.rect.move_ip(-self.speed*sum_mv[0], -self.speed*sum_mv[1])
+        if not (sum_mv[0] == 0 and sum_mv[1] == 0):
+            self.dire = tuple(sum_mv)
+            self.image = self.imgs[self.dire]
         screen.blit(self.image, self.rect)
-
+        if self.state == "normal":
+            self.image = self.imgs[self.dire]
+        else:
+            self.image = self.hyper_imgs[self.dire]
+        screen.blit(self.image, self.rect)
 
 class Bomb(pg.sprite.Sprite):
     colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255),
@@ -335,13 +342,13 @@ def main():
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 return 0
-            if event.type == pg.KEYDOWN:
-                if event.key == pg.K_SPACE:
-                    beams.add(Beam(bird))
-                if event.key == pg.K_e and score.value >= 20:
-                    # EMP 発動
-                    score.value -= 20
-                    EMP(emys, bombs, screen)
+            # --- 無敵（Hyper）発動 ---
+            if event.type == pg.KEYDOWN and event.key == pg.K_RSHIFT:
+                if score.value >= 100 and bird.state == "normal":
+                    bird.state = "hyper"
+                    bird.hyper_life = 500
+                    score.value -= 100
+
             if event.type == pg.KEYDOWN and event.key == pg.K_SPACE:
                 if key_lst[pg.K_LSHIFT]:
                     beams.add(NeoBeam(bird, num=5).gen_beams())
@@ -371,40 +378,28 @@ def main():
                     # 敵機が停止状態に入ったら，intervalに応じて爆弾投下
                     bombs.add(Bomb(emy, bird))
 
-        # 敵機とビームの衝突（倒された敵は消える）
-        # groupcollide の戻りは {emy: [list of beams hit it]}
-        for emy in pg.sprite.groupcollide(emys, beams, True, True).keys():
-            exps.add(Explosion(emy, 100))
-            score.value += 10
-            bird.change_img(6, screen)
+        for emy in pg.sprite.groupcollide(emys, beams, True, True).keys():  # ビームと衝突した敵機リスト
+            exps.add(Explosion(emy, 100))  # 爆発エフェクト
+            score.value += 10  # 10点アップ
+            bird.change_img(6, screen)  # こうかとん喜びエフェクト
 
-        # ビームと爆弾の当たり判定
-        # bombs と beams を自動killさせずに衝突結果を取得して
-        # inactive フラグを見て処理する（inactive は爆発させない）
-        collisions = pg.sprite.groupcollide(bombs, beams, False, True)  # bombs は自動削除しない
-        for bomb, hit_beams in collisions.items():
-            if getattr(bomb, "inactive", False):
-                # EMP無効化された爆弾は当たっても爆発せずに消えるだけ
-                bomb.kill()
-                continue
-            # 通常爆弾は爆発させて kill
-            exps.add(Explosion(bomb, 50))
-            score.value += 1
-            bomb.kill()
+        for bomb in pg.sprite.groupcollide(bombs, beams, True, True).keys():  # ビームと衝突した爆弾リスト
+            exps.add(Explosion(bomb, 50))  # 爆発エフェクト
+            score.value += 1  # 1点アップ
+        
+        hit_bombs = pg.sprite.spritecollide(bird, bombs, True)
 
-        # こうかとんと爆弾の衝突処理
-        bird_hits = pg.sprite.spritecollide(bird, bombs, False)  # 自動killしない
-        for bomb in bird_hits:
-            if getattr(bomb, "inactive", False):
-                # EMPで無効化された爆弾は爆発せずに消えるだけ（ダメージなし）
-                bomb.kill()
-                continue
-            # 通常爆弾に当たった → ゲームオーバーの処理（元の挙動を維持）
-            bird.change_img(8, screen)
-            score.update(screen)
-            pg.display.update()
-            time.sleep(2)
-            return
+        if bird.state == "hyper":
+             for bomb in hit_bombs:
+                 exps.add(Explosion(bomb, 50))
+                 score.value += 1
+        else:
+            for bomb in hit_bombs:
+                bird.change_img(8, screen)  # こうかとん悲しみエフェクト
+                score.update(screen)
+                pg.display.update()
+                time.sleep(2)
+                return
 
         # 更新・描画
         bird.update(key_lst, screen)
@@ -416,9 +411,12 @@ def main():
         bombs.draw(screen)
         exps.update()
         exps.draw(screen)
-        gravitys.update()
-        gravitys.draw(screen)
-        bird.update(key_lst, screen)
+        # --- 無敵時間の減少 ---
+        if bird.state == "hyper":
+            bird.hyper_life -= 1
+            if bird.hyper_life <= 0:
+                bird.state = "normal"
+
         score.update(screen)
         pg.display.update()
         tmr += 1
